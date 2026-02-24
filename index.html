@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Báo Cáo Mang Tải MBA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
+
+    <style>
+        body { font-family: "Times New Roman", Times, serif; background-color: #f0f2f5; color: #000; }
+        .export-area { background: white; padding: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #000; padding: 6px; text-align: center; font-size: 11pt; }
+        th { background-color: #f3f4f6; }
+        .page-break { page-break-before: always; } /* Ngắt trang khi in/xuất PDF */
+        .header-title { color: #1e40af; text-transform: uppercase; font-weight: bold; text-align: center; }
+        .btn { transition: all 0.3s; cursor: pointer; padding: 8px 16px; border-radius: 6px; font-weight: bold; }
+    </style>
+</head>
+<body class="p-4">
+
+    <div class="max-w-6xl mx-auto bg-white p-6 rounded-lg shadow-lg">
+        <div class="text-center mb-6">
+            <h1 class="header-title text-2xl">Báo cáo phân tích mang tải máy biến áp</h1>
+            <p class="italic text-gray-600">Bản quyền © 2025 by Phạm Hồng Long & Brown Eyes</p>
+        </div>
+
+        <div class="flex flex-wrap gap-4 justify-center mb-8 border-b pb-6 no-print">
+            <input type="file" id="uploadExcel" accept=".xlsx, .xls" class="border p-2 rounded bg-gray-50"/>
+            <button onclick="exportToPDF()" class="btn bg-red-600 text-white hover:bg-red-700">Xuất PDF (A4)</button>
+            <button onclick="exportToDoc()" class="btn bg-blue-600 text-white hover:bg-blue-700">Xuất Word (DOC)</button>
+        </div>
+
+        <div id="reportContent" class="export-area">
+            <div class="mb-10 text-center">
+                <h2 class="text-lg font-bold mb-4 uppercase">I. Biểu đồ cơ cấu mang tải hệ thống</h2>
+                <div style="height: 400px; width: 100%;">
+                    <canvas id="pieChart"></canvas>
+                </div>
+            </div>
+
+            <div class="page-break"></div>
+
+            <div class="mb-10 no-print">
+                <h2 class="text-lg font-bold mb-4 uppercase">II. Tra cứu chi tiết TBA</h2>
+                <div class="flex gap-2 mb-4">
+                    <input type="text" id="searchInput" placeholder="Nhập tên TBA..." class="border p-2 w-full rounded">
+                    <button onclick="handleSearch()" class="bg-gray-800 text-white px-4 py-2 rounded">Xem</button>
+                </div>
+            </div>
+
+            <div id="searchResultArea" class="hidden mb-10">
+                <div class="grid grid-cols-4 gap-2 mb-4 text-sm border p-4 bg-gray-50">
+                    <div>Thời gian Max: <b id="resTime"></b></div>
+                    <div>Tải Max: <b id="resLoad"></b></div>
+                    <div>Loại: <b id="resLevel"></b></div>
+                    <div>Lệch pha: <b id="resLech"></b></div>
+                </div>
+                <div style="height: 300px; width: 100%;">
+                    <canvas id="lineChart"></canvas>
+                </div>
+            </div>
+
+            <div class="page-break"></div>
+
+            <div id="tablesContainer">
+                <p class="text-center text-gray-400 italic">Vui lòng tải file để hiển thị dữ liệu bảng...</p>
+            </div>
+        </div>
+    </div>
+
+<script>
+    let allData = [];
+    let summaryList = [];
+    const LEVELS = [
+        { id: 'non_tai', label: 'Non tải', min: 0, max: 50, color: '#10b981' },
+        { id: 'binh_thuong', label: 'Bình thường', min: 50, max: 80, color: '#3b82f6' },
+        { id: 'day_tai', label: 'Đầy tải', min: 80, max: 100, color: '#f59e0b' },
+        { id: 'qua_tai', label: 'Quá tải', min: 100, max: 120, color: '#ef4444' },
+        { id: 'qua_tai_nang', label: 'Quá tải nặng', min: 120, max: 9999, color: '#7f1d1d' }
+    ];
+
+    document.getElementById('uploadExcel').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const data = new Uint8Array(event.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(sheet, { range: 4 });
+            processData(json);
+        };
+        reader.readAsArrayBuffer(file);
+    });
+
+    function processData(data) {
+        allData = data;
+        const mapTBA = new Map();
+        data.forEach(row => {
+            const ten = row['Tên TBA'];
+            if(!ten) return;
+            const loadVal = parseFloat(row['Mang tải']) || 0;
+            const dongMax = Math.max(parseFloat(row['Ia'])||0, parseFloat(row['Ib'])||0, parseFloat(row['Ic'])||0);
+
+            if (!mapTBA.has(ten)) {
+                mapTBA.set(ten, {
+                    ten: ten, p: row['Công suất'],
+                    iDm: Math.round(parseFloat(row['I định mức']) || 0), // LÀM TRÒN SỐ
+                    timeMax: row['Ngày đo'], loadMax: loadVal, iMax: dongMax
+                });
+            } else if (loadVal > mapTBA.get(ten).loadMax) {
+                let curr = mapTBA.get(ten);
+                curr.loadMax = loadVal; curr.timeMax = row['Ngày đo']; curr.iMax = dongMax;
+            }
+        });
+        summaryList = Array.from(mapTBA.values());
+        renderPieChart();
+        renderTables();
+    }
+
+    function renderPieChart() {
+        const ctx = document.getElementById('pieChart').getContext('2d');
+        const counts = LEVELS.map(lvl => summaryList.filter(item => {
+            const v = item.loadMax; return v > lvl.min && v <= lvl.max;
+        }).length);
+
+        if(window.pieChartObj) window.pieChartObj.destroy();
+        window.pieChartObj = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: LEVELS.map(l => l.label),
+                datasets: [{ data: counts, backgroundColor: LEVELS.map(l => l.color) }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    datalabels: { color: '#000', font: { weight: 'bold', size: 14 } }
+                }
+            },
+            plugins: [ChartDataLabels]
+        });
+    }
+
+    function renderTables() {
+        const container = document.getElementById('tablesContainer');
+        container.innerHTML = '<h2 class="text-lg font-bold mb-4 uppercase text-center">III. Danh sách phân loại chi tiết</h2>';
+        
+        LEVELS.forEach(lvl => {
+            const filtered = summaryList.filter(item => (item.loadMax > lvl.min && item.loadMax <= lvl.max))
+                                       .sort((a, b) => b.loadMax - a.loadMax);
+            if (filtered.length === 0) return;
+
+            const div = document.createElement('div');
+            div.className = "mb-8";
+            div.innerHTML = `
+                <h3 class="font-bold mb-2" style="color:${lvl.color}">● Trạm ${lvl.label}:</h3>
+                <table>
+                    <thead><tr><th>STT</th><th>Tên TBA</th><th>P (kVA)</th><th>Iđm (A)</th><th>Thời gian Max</th><th>Dòng Max</th><th>Tải (%)</th></tr></thead>
+                    <tbody>
+                        ${filtered.map((item, i) => `
+                            <tr><td>${i+1}</td><td>${item.ten}</td><td>${item.p}</td><td>${item.iDm}</td><td>${item.timeMax}</td><td>${item.iMax.toFixed(1)}</td><td class="font-bold">${item.loadMax}%</td></tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    // XUẤT PDF
+    function exportToPDF() {
+        const element = document.getElementById('reportContent');
+        const opt = {
+            margin: [10, 10, 10, 10],
+            filename: 'Bao-cao-mang-tai.pdf',
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: 'css', before: '.page-break' }
+        };
+        html2pdf().set(opt).from(element).save();
+    }
+
+    // XUẤT WORD
+    function exportToDoc() {
+        const content = document.getElementById('reportContent').innerHTML;
+        const converted = htmlDocx.asBlob(content, { orientation: 'portrait', margins: { top: 720 } });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(converted);
+        link.download = 'Bao-cao-mang-tai.docx';
+        link.click();
+    }
+
+    function handleSearch() {
+        const query = document.getElementById('searchInput').value.toLowerCase();
+        const results = allData.filter(r => String(r['Tên TBA']).toLowerCase().includes(query));
+        if (results.length === 0) return alert("Không thấy trạm!");
+        
+        document.getElementById('searchResultArea').classList.remove('hidden');
+        const maxRow = results.reduce((p, c) => (p['Mang tải'] > c['Mang tải']) ? p : c);
+        
+        document.getElementById('resTime').innerText = maxRow['Ngày đo'];
+        document.getElementById('resLoad').innerText = maxRow['Mang tải'] + "%";
+        document.getElementById('resLevel').innerText = LEVELS.find(l => maxRow['Mang tải'] > l.min && maxRow['Mang tải'] <= l.max).label;
+        document.getElementById('resLech').innerText = maxRow['Lệch pha'] + "%";
+
+        const ctx = document.getElementById('lineChart').getContext('2d');
+        if(window.lineChartObj) window.lineChartObj.destroy();
+        window.lineChartObj = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: results.map(r => r['Ngày đo'].split(' ')[1]),
+                datasets: [{ label: 'Tải (%)', data: results.map(r => r['Mang tải']), borderColor: '#1e40af', fill: false }]
+            },
+            options: { 
+                responsive: true, maintainAspectRatio: false,
+                plugins: { datalabels: { align: 'top', color: '#000', font: { size: 9 } } }
+            },
+            plugins: [ChartDataLabels]
+        });
+    }
+</script>
+</body>
+</html>
