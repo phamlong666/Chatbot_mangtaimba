@@ -129,9 +129,12 @@
             const v = item.loadMax; return v > lvl.min && v <= lvl.max;
         }).length);
 
+        // Tính tổng số lượng máy biến áp từ dữ liệu tải lên
+        const totalMBA = summaryList.length;
+
         if(window.pieChartObj) window.pieChartObj.destroy();
         window.pieChartObj = new Chart(ctx, {
-            type: 'pie',
+            type: 'doughnut', // Chuyển từ 'pie' sang 'doughnut' để đục lỗ giữa
             data: {
                 labels: LEVELS.map(l => l.label),
                 datasets: [{ data: counts, backgroundColor: LEVELS.map(l => l.color) }]
@@ -142,7 +145,29 @@
                     datalabels: { color: '#000', font: { weight: 'bold', size: 14 } }
                 }
             },
-            plugins: [ChartDataLabels]
+            // Thêm plugin tùy biến vẽ chữ vào giữa tâm vòng tròn
+            plugins: [ChartDataLabels, {
+                id: 'centerText',
+                beforeDraw: function(chart) {
+                    const width = chart.width,
+                          height = chart.height,
+                          ctx = chart.ctx;
+                    
+                    ctx.restore();
+                    // Tính toán font size linh hoạt dựa theo chiều cao biểu đồ
+                    const fontSize = (height / 240).toFixed(2);
+                    ctx.font = "bold " + fontSize + "em 'Times New Roman'";
+                    ctx.textBaseline = "middle";
+                    ctx.fillStyle = "#000";
+
+                    const text = totalMBA + " MBA",
+                          textX = Math.round((width - ctx.measureText(text).width) / 2),
+                          textY = chart.chartArea.top + (chart.chartArea.bottom - chart.chartArea.top) / 2;
+
+                    ctx.fillText(text, textX, textY);
+                    ctx.save();
+                }
+            }]
         });
     }
 
